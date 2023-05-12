@@ -12,6 +12,7 @@ from keras_preprocessing.sequence import pad_sequences
 from keras.models import Model
 from src.preprocessing import *
 from src.model_define import *
+from src.model_train import *
 
 import tensorflow as tf
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -89,6 +90,7 @@ def train_model(EMBEDDING_NAME,train_X,train_y,val_X,val_y,test_X,test_y):
 
 if __name__ == '__main__':
 
+    gc.collect()
     print('\nloading data...')
     train_df = pd.read_csv("./input/train.csv")
     test_df = pd.read_csv("./input/test.csv")

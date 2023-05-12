@@ -16,6 +16,8 @@ from keras.models import Model
 from keras import initializers, regularizers, constraints, optimizers, layers
 from sklearn.metrics import accuracy_score ,confusion_matrix, classification_report, f1_score
 import seaborn as sns
+import torch
+import torch.nn as nn
 
 
 def model_base_define(maxlen, max_features, embed_size):
@@ -42,43 +44,89 @@ def model_embedding_define(maxlen, max_features, embed_size, embedding_matrix):
     model = Model(inputs=inp, outputs=x)
     print(model.summary())
     return model
-  
 
-def best_f1_search(val_y,pred_val_y):
-    best_f1 = 0
-    best_thresh = 0
 
-    for thresh in np.arange(0.1, 0.501, 0.01):
-        thresh = np.round(thresh, 2)
-        f1 = metrics.f1_score(val_y, (pred_val_y>thresh).astype(int))
-        print("F1 score at threshold {0} is {1}".format(thresh, f1))
-        if f1 > best_f1:
-            best_f1 = f1
-            best_thresh = thresh
-    print('\nbest f1 score is {} at threshold {}'.format(best_f1,best_thresh))
 
-    return best_f1,best_thresh
+class Attention(nn.Module):
+    def __init__(self, feature_dim, step_dim, bias=True, **kwargs):
+        super(Attention, self).__init__(**kwargs)
+        
+        self.supports_masking = True
 
-def model_matrix_eval(val_y,pred_val_y,best_thresh,EMBEDDING_NAME):
-    best_pred_val_y = (pred_val_y>best_thresh).astype(int)
-    accuracy = accuracy_score(val_y, best_pred_val_y)
-    print(f"Val accuracy: {accuracy:.4f}")
-    print(f'F1 score: {f1_score(val_y, best_pred_val_y):.4f}')
-    confution_lg = confusion_matrix(val_y,best_pred_val_y) #confusion metrics
-    sns.heatmap(confution_lg, linewidths=0.01, annot=True,fmt= '.1f', color='red') #heat map
-    plt.xlabel('Predicted Label')
-    plt.ylabel('True Label')
-    plt.title('Confusion Matrix of ' + EMBEDDING_NAME)
-    plt.savefig('../outputs/confusion_matrix_' + EMBEDDING_NAME + '.png')
-    plt.close()
+        self.bias = bias
+        self.feature_dim = feature_dim
+        self.step_dim = step_dim
+        self.features_dim = 0
+        
+        weight = torch.zeros(feature_dim, 1)
+        nn.init.xavier_uniform_(weight)
+        self.weight = nn.Parameter(weight)
+        
+        if bias:
+            self.b = nn.Parameter(torch.zeros(step_dim))
+        
+    def forward(self, x, mask=None):
+        feature_dim = self.feature_dim
+        step_dim = self.step_dim
 
-def plot_training(history, model_name):
-    plt.plot(history.history['loss'], label='train')
-    plt.plot(history.history['val_loss'], label='test')
-    plt.title('Model Loss')
-    plt.ylabel('Loss')
-    plt.xlabel('Epoch')
-    plt.legend(['Training', 'Validation'], loc='upper right')
-    plt.savefig('../outputs/loss_'+ model_name +'.png')
-    plt.close()
-    # plot training and validation loss
+        eij = torch.mm(
+            x.contiguous().view(-1, feature_dim), 
+            self.weight
+        ).view(-1, step_dim)
+        
+        if self.bias:
+            eij = eij + self.b
+            
+        eij = torch.tanh(eij)
+        a = torch.exp(eij)
+        
+        if mask is not None:
+            a = a * mask
+
+        a = a / torch.sum(a, 1, keepdim=True) + 1e-10
+
+        weighted_input = x * torch.unsqueeze(a, -1)
+        return torch.sum(weighted_input, 1)
+    
+class NeuralNet(nn.Module):
+    def __init__(self, embedding_matrix, max_features, embed_size, maxlen):
+        super(NeuralNet, self).__init__()
+        
+        hidden_size = 128
+        
+        self.embedding = nn.Embedding(max_features, embed_size)
+        self.embedding.weight = nn.Parameter(torch.tensor(embedding_matrix, dtype=torch.float32))
+        self.embedding.weight.requires_grad = False
+        
+        self.embedding_dropout = nn.Dropout2d(0.1)
+        self.lstm = nn.LSTM(embed_size, hidden_size, bidirectional=True, batch_first=True)
+        self.gru = nn.GRU(hidden_size*2, hidden_size, bidirectional=True, batch_first=True)
+        
+        self.lstm_attention = Attention(hidden_size*2, maxlen)
+        self.gru_attention = Attention(hidden_size*2, maxlen)
+        
+        self.linear = nn.Linear(1024, 16)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.1)
+        self.out = nn.Linear(16, 1)
+        
+    def forward(self, x):
+        h_embedding = self.embedding(x)
+        h_embedding = torch.squeeze(self.embedding_dropout(torch.unsqueeze(h_embedding, 0)))
+        
+        h_lstm, _ = self.lstm(h_embedding)
+        h_gru, _ = self.gru(h_lstm)
+        
+        h_lstm_atten = self.lstm_attention(h_lstm)
+        h_gru_atten = self.gru_attention(h_gru)
+        
+        avg_pool = torch.mean(h_gru, 1)
+        max_pool, _ = torch.max(h_gru, 1)
+        
+        conc = torch.cat((h_lstm_atten, h_gru_atten, avg_pool, max_pool), 1)
+        conc = self.relu(self.linear(conc))
+        conc = self.dropout(conc)
+        out = self.out(conc)
+        
+        return out
+
