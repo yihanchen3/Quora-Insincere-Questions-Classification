@@ -6,6 +6,8 @@ from sklearn import metrics
 import matplotlib.pyplot as plt
 from datetime import datetime
 import gc
+import torch
+import torch.nn as nn   
 
 from keras.preprocessing.text import Tokenizer
 from keras_preprocessing.sequence import pad_sequences
@@ -23,38 +25,54 @@ embedding_files = {
     'paragram': './input/embeddings/paragram_300_sl999/paragram_300_sl999.txt'
 }
 
+def seed_everything(seed=42):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
 
-
-def get_embedding(EMBEDDING_FILE):
-
-    def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-    if EMBEDDING_FILE == embedding_files['glove']:
-        embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE, encoding='utf-8', errors='ignore'))
-    elif EMBEDDING_FILE == embedding_files['paragram'] or EMBEDDING_FILE == embedding_files['wiki']:
-        embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE, encoding="utf8", errors='ignore') if len(o)>100)
-
-    all_embs = np.stack(embeddings_index.values())
-    emb_mean,emb_std = all_embs.mean(), all_embs.std()
-    embed_size = all_embs.shape[1]
-
-    word_index = tokenizer.word_index
-    nb_words = min(max_features, len(word_index))
-    embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-    for word, i in word_index.items():
-        if i >= max_features: continue
-        embedding_vector = embeddings_index.get(word)
-        if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-    
-    del word_index, all_embs
-    
-    return embedding_matrix,embeddings_index
-
-
+def train_final_model(model, x_train, y_train, x_val, y_val ,test_loader, batch_size=512, n_epochs=5):
+    optimizer = torch.optim.Adam(model.parameters())
+    train = torch.utils.data.TensorDataset(x_train, y_train)
+    valid = torch.utils.data.TensorDataset(x_val, y_val)
+    train_loader = torch.utils.data.DataLoader(train, batch_size=batch_size, shuffle=True)
+    valid_loader = torch.utils.data.DataLoader(valid, batch_size=batch_size, shuffle=False)
+    loss_fn = torch.nn.BCEWithLogitsLoss(reduction='mean').cuda()
+    for epoch in range(n_epochs):
+        start_time = time.time()
+        model.train()
+        avg_loss = 0.
+        for x_batch, y_batch in tqdm(train_loader, disable=True):
+            y_pred = model(x_batch)
+            loss = loss_fn(y_pred, y_batch)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            avg_loss += loss.item() / len(train_loader)
+        model.eval()
+        valid_preds = np.zeros((x_val.size(0)))
+        elapsed_time = time.time() - start_time
+        print('Epoch {}/{} \t loss={:.4f} \t time={:.2f}s'.format(
+            epoch + 1, n_epochs, avg_loss, elapsed_time))
+    valid_preds = np.zeros((x_val.size(0)))
+    avg_val_loss = 0.
+    for i, (x_batch, y_batch) in enumerate(valid_loader):
+        y_pred = model(x_batch).detach()
+        avg_val_loss += loss_fn(y_pred, y_batch).item() / len(valid_loader)
+        valid_preds[i * batch_size:(i+1) * batch_size] = sigmoid(y_pred.cpu().numpy())[:, 0]
+    print('Validation loss: ', avg_val_loss)
+    test_preds = np.zeros((len(test_loader.dataset)))
+    for i, (x_batch,) in enumerate(test_loader):
+        y_pred = model(x_batch).detach()
+        test_preds[i * batch_size:(i+1) * batch_size] = sigmoid(y_pred.cpu().numpy())[:, 0]
+    return valid_preds, test_preds
 
 
 if __name__ == '__main__':
     gc.collect()
-    ## load data
+    # load data
     print('\nloading data...')
     train_df = pd.read_csv("./input/train.csv")
     
@@ -90,9 +108,9 @@ if __name__ == '__main__':
 
 
     print('\ntesting each embedding...')
-    embedding_matrix_glove, _ = get_embedding(embedding_files['glove'])
-    embedding_matrix_wiki, _ = get_embedding(embedding_files['wiki']) 
-    embedding_matrix_paragram, _ = get_embedding(embedding_files['paragram'])
+    embedding_matrix_glove, _ = get_embedding(embedding_files['glove'],tokenizer, max_features, embedding_files)
+    embedding_matrix_wiki, _ = get_embedding(embedding_files['wiki'],tokenizer, max_features, embedding_files) 
+    embedding_matrix_paragram, _ = get_embedding(embedding_files['paragram'],tokenizer, max_features, embedding_files)
     embedding_matrix = np.mean([embedding_matrix_glove, embedding_matrix_wiki,embedding_matrix_paragram], axis=0)
     del embedding_matrix_glove, embedding_matrix_wiki, embedding_matrix_paragram
 
@@ -124,7 +142,7 @@ if __name__ == '__main__':
         seed_everything(seed + i)
         model = NeuralNet(embedding_matrix,max_features,embed_size,maxlen)
         model.cuda()
-        valid_preds_fold, test_preds_fold = train_final_model(model,x_train_fold,y_train_fold,x_val_fold, y_val_fold,test_loader, validate=False)
+        valid_preds_fold, test_preds_fold = train_final_model(model,x_train_fold,y_train_fold,x_val_fold, y_val_fold,test_loader)
 
         train_preds[valid_idx] = valid_preds_fold
         test_preds[:, i] = test_preds_fold

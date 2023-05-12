@@ -16,8 +16,6 @@ from keras.models import Model
 from keras import initializers, regularizers, constraints, optimizers, layers
 from sklearn.metrics import accuracy_score ,confusion_matrix, classification_report, f1_score
 import seaborn as sns
-import torch
-import torch.nn as nn
 import random
 
 
@@ -49,7 +47,7 @@ def model_matrix_eval(val_y,pred_val_y,best_thresh,EMBEDDING_NAME):
     plt.xlabel('Predicted Label')
     plt.ylabel('True Label')
     plt.title('Confusion Matrix of ' + EMBEDDING_NAME)
-    plt.savefig('../outputs/confusion_matrix_' + EMBEDDING_NAME + '.png')
+    plt.savefig('./outputs/confusion_matrix_' + EMBEDDING_NAME + '.png')
     plt.close()
 
 def plot_training(history, model_name):
@@ -59,11 +57,36 @@ def plot_training(history, model_name):
     plt.ylabel('Loss')
     plt.xlabel('Epoch')
     plt.legend(['Training', 'Validation'], loc='upper right')
-    plt.savefig('../outputs/loss_'+ model_name +'.png')
+    plt.savefig('./outputs/loss_'+ model_name +'.png')
     plt.close()
     # plot training and validation loss
 
+def get_embedding(EMBEDDING_FILE,tokenizer,max_features,embedding_files):
+    def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
+    if EMBEDDING_FILE == embedding_files['glove']:
+        embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE, encoding='utf-8', errors='ignore'))
+    elif EMBEDDING_FILE == embedding_files['paragram'] or EMBEDDING_FILE == embedding_files['wiki']:
+        embeddings_index = dict(get_coefs(*o.split(" ")) for o in open(EMBEDDING_FILE, encoding="utf8", errors='ignore') if len(o)>100)
 
+    all_embs = np.stack(embeddings_index.values())
+    emb_mean,emb_std = all_embs.mean(), all_embs.std()
+    embed_size = all_embs.shape[1]
+
+    word_index = tokenizer.word_index
+    nb_words = min(max_features, len(word_index))
+    embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
+    for word, i in word_index.items():
+        if i >= max_features: continue
+        embedding_vector = embeddings_index.get(word)
+        if embedding_vector is not None: embedding_matrix[i] = embedding_vector
+    
+    del word_index, all_embs
+    
+    return embedding_matrix,embeddings_index
+
+'''
+# the following code is for model_v3 training, and requires Pytorch
+import torch
 def seed_everything(seed=42):
     random.seed(seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
@@ -148,3 +171,5 @@ def train_final_model(model, x_train, y_train, x_val, y_val ,test_loader, valida
     # scheduler.step()
     
     return valid_preds, test_preds#, test_preds_local
+
+'''

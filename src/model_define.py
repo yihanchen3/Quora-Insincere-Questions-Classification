@@ -16,8 +16,7 @@ from keras.models import Model
 from keras import initializers, regularizers, constraints, optimizers, layers
 from sklearn.metrics import accuracy_score ,confusion_matrix, classification_report, f1_score
 import seaborn as sns
-import torch
-import torch.nn as nn
+
 
 
 def model_base_define(maxlen, max_features, embed_size):
@@ -46,7 +45,9 @@ def model_embedding_define(maxlen, max_features, embed_size, embedding_matrix):
     return model
 
 
-
+# the following code is only used in model_v3, and requires pytorch; if you only want to use model_v1 and model_v2, you can ignore it
+import torch
+import torch.nn as nn
 class Attention(nn.Module):
     def __init__(self, feature_dim, step_dim, bias=True, **kwargs):
         super(Attention, self).__init__(**kwargs)
@@ -129,4 +130,3 @@ class NeuralNet(nn.Module):
         out = self.out(conc)
         
         return out
-
