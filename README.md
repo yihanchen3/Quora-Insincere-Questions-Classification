@@ -1,4 +1,4 @@
-# NLP Approaches on Questions Classification Task
+# DLNLP Approaches on Questions Classification Task 
 
 In this project, a Quora Insincere Questions Classification task is addressed by three version of models individually (https://www.kaggle.com/c/quora-insincere-questions-classification). The main target of this binary classification task is to identify whether the question text are insincere or sincere. 
 
